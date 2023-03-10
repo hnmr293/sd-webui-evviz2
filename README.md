@@ -31,7 +31,7 @@ This figure shows correlations between each token. Calculation is carried out as
 1. Compute an embedding vector `v` from the given prompt. `v` is typically has dimension (77, 768).
 2. For each token `t`, create a new prompt with the `t` replaced by *padding token*. Then compute its embedding vector `v_{t}`.
 3. Let `d_{t} = v - v_{t}`.
-4. Each row of `d_{t}` is a 768(or 1024)-dimensional vector representing `t`'s effect on each token. Then compute `|d_{t}|` for each row where `|x|` is norm of a vector `x`.
+4. Let `d_{t,n}` is nth row vector of `d_{t}`. `d_{t,n}` is a 768(or 1024)-dimensional vector representing `t`'s effect on nth token. Then compute `|d_{t,n}|` where `|x|` is norm of a vector `x`.
 5. Repeat procedure 2..3 for all `t` in the given prompt.
 
-In default, *padding token* is `!` (ID=0).
+By default, *padding token* is `!` (ID=0).
