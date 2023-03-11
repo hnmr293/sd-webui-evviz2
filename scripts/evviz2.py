@@ -5,11 +5,13 @@ ensure_install('plotly')
 
 import sys
 import traceback
+from dataclasses import dataclass
 from typing import List, Tuple, Dict, Callable, Union
 
 import numpy as np
 import torch
 from torch import Tensor, nn
+from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 import gradio as gr
 
@@ -17,13 +19,53 @@ from modules import script_callbacks
 from modules import shared
 from modules.sd_hijack_clip import FrozenCLIPEmbedderWithCustomWordsBase as CLIP
 
+from scripts.lib.sdhook import SDModel, each_unet_attn_layers
+
 NAME = 'EvViz2'
+
+@dataclass
+class Token:
+    id: int
+    token: str
+
+class Context:
+    def __init__(self, context: Tensor, token_count: int):
+        self._context = context
+        self.token_count = token_count
+    
+    @property
+    def context(self):
+        return self._context[:self.token_count, 1:-1, :]
+    
+    @property
+    def base(self):
+        return self._context[0, 1:-1, :]
+    
+    @property
+    def padded(self):
+        return self._context[1:self.token_count+1, 1:-1, :]
+    
+    @property
+    def device(self):
+        return self._context.device
+    
+    @property
+    def dtype(self):
+        return self._context.dtype
+    
+    def to(self, device, dtype, inplace=False):
+        if inplace:
+            self._context = self._context.to(device, dtype)
+            return self
+        else:
+            return Context(self._context.to(device, dtype), self.token_count)
+
 
 def generate_embeddings(
     te: CLIP,
     prompt: str,
     padding: Union[str,int]
-) -> Tuple[List[Tuple[int,str]], Tensor, Tensor]:
+) -> Tuple[List[Token], Context]:
     
     if hasattr(te.wrapped, 'tokenizer'):
         # v1
@@ -54,43 +96,43 @@ def generate_embeddings(
     
     embeddings = te(prompts).cpu()
     return (
-        [(token_num, id_to_token(token_num)) for token_num in tokens],
-        embeddings[0, 1:-1, :],
-        embeddings[1:, 1:-1, :]
+        [Token(token_num, id_to_token(token_num)) for token_num in tokens],
+        Context(embeddings, len(tokens))
     )
 
-def run(prompt: str, padding: Union[str,int,None], skip_comma: bool, gl: bool):
-    if padding is None:
-        padding = 0
-    elif isinstance(padding, str):
-        if len(padding) == 0:
-            padding = 0
-        else:
-            try:
-                padding = int(padding)
-            except:
-                pass
-    
-    te: CLIP = shared.sd_model.cond_stage_model # type: ignore
-    tokens, v, vs = generate_embeddings(te, prompt, padding)
-    # v := (75, 768) or (75, 1024)
-    v_max = torch.max(v)
-    
-    # main plot
+def build_main_graph(
+    title: str,
+    context_: Context,
+    tokens: List[Token],
+    skip_comma: bool,
+    use_gl: bool,
+    force_float: bool,
+):
     fig = go.Figure()
-    xs = list(range(v.shape[1]))
+    
+    context = context_.base
+    xs = list(range(context.shape[1]))
+    v_max = torch.max(context)
     y_count = 0
-    for idx, (token_num, token) in enumerate(tokens):
-        if skip_comma and token == ',</w>':
+    
+    for pos, tt in enumerate(tokens):
+        if skip_comma and tt.token == ',</w>':
             continue
+        
         base_y = y_count * v_max/2
-        vals = v[idx] + base_y
+        vals = context[pos] + base_y
+        
+        if force_float:
+            vals = vals.to('cpu', dtype=torch.float)
+        else:
+            vals = vals.to('cpu')
+        
         fig.add_trace(
-            [go.Scatter, go.Scattergl][gl](
+            [go.Scatter, go.Scattergl][use_gl](
                 x=xs,
                 y=vals,
                 mode='lines+markers',
-                name=f'token {idx}: {token} ({token_num})',
+                name=f'token {pos}: {tt.token} ({tt.id})',
                 marker=dict(
                     size=6,
                     symbol='circle',
@@ -105,18 +147,29 @@ def run(prompt: str, padding: Union[str,int,None], skip_comma: bool, gl: bool):
                     width=2,
                 ),
                 hovertemplate='%{x}<br>%{customdata[0]}',
-                customdata=v[idx].unsqueeze(1),
+                customdata=context[pos].unsqueeze(1).to('cpu'),
             )
         )
         y_count += 1
     
     fig.update_layout(
+        title=dict(text=title),
         yaxis=dict(showticklabels=False),
         legend=dict(xanchor="left", yanchor="top"),
     )
     
+    return fig
+    
+
+def create_correl_map(
+    context: Context,
+    tokens: List[Token],
+    skip_comma: bool,
+    use_gl: bool,
+    force_float: bool,
+):
     # self-correlation
-    fig2 = go.Figure()
+    
     """
           a   cute   girl
     a     *
@@ -131,64 +184,171 @@ def run(prompt: str, padding: Union[str,int,None], skip_comma: bool, gl: bool):
     
     correls = []
     indices = []
-    for idx, (token_num, token) in enumerate(tokens):
-        if skip_comma and token == ',</w>':
+    for pos, tt in enumerate(tokens):
+        if skip_comma and tt.token == ',</w>':
             continue
-        w = vs[idx]
-        dv = v - w # (75, 768)
+        dv = context.base - context.padded[pos]
         dv_norm = torch.linalg.vector_norm(dv, dim=1) # (75,)
-        dv_norm[idx] = 0.0
+        #dv_norm[pos] = 0.0
+        dv_norm[pos] = np.nan
         correls.append(dv_norm)
-        indices.append(idx)
+        indices.append(pos)
     
     cs = torch.gather(
         torch.vstack(correls), 
         dim=1,
-        index=torch.LongTensor([indices] * len(correls)),
+        index=torch.LongTensor([indices] * len(correls)).to(context.device),
     )
     
-    fig2.add_trace(
-        go.Heatmap(
-                z=cs,
-                #x=[ t.replace('</w>', '') for i, t in tokens ],
-                #y=[ t.replace('</w>', '') for i, t in tokens ],
-                colorscale=[[0, 'rgb(64,64,255)'], [1, 'rgb(255,0,0)']],
-                hovertemplate='%{y} -> %{x}<br>%{z} <extra></extra>',
-                hoverlabel=dict(font_family='monospace'),
-                xgap=1,
-                ygap=1,
-            )
+    if force_float:
+        cs = cs.to('cpu', dtype=torch.float)
+    else:
+        cs = cs.to('cpu')
+    
+    map = go.Heatmap(
+        z=cs,
+        colorscale=[[0, 'rgb(64,64,255)'], [1, 'rgb(255,0,0)']],
+        hovertemplate='%{y} -> %{x}<br>%{z} <extra></extra>',
+        hoverlabel=dict(font_family='monospace'),
+        xgap=1,
+        ygap=1,
     )
     
-    ticks = [ tokens[index][1].replace('</w>', '') for index in indices ]
-    fig2.update_layout(
-        xaxis=dict(
-            side='top',
+    return map, cs, indices
+
+
+def build_correl_graph(
+    titles: List[str],
+    contexts: List[Context],
+    tokens: List[Token],
+    skip_comma: bool,
+    use_gl: bool,
+    force_float: bool,
+):
+    if len(contexts) == 0:
+        return
+    
+    assert len(titles) == len(contexts)
+    assert len(set([ctx.token_count for ctx in contexts])) == 1, set([ctx.token_count for ctx in contexts])
+    
+    fig = make_subplots(
+        rows=len(contexts),
+        cols=1,
+        subplot_titles=titles,
+        vertical_spacing=0.01,
+    )
+    
+    for row, context in enumerate(contexts, start=1):
+        map, cs, indices = create_correl_map(context, tokens, skip_comma, use_gl=use_gl, force_float=force_float)
+        ticks = [ tokens[index].token.replace('</w>', '') for index in indices ]
+        fig.add_trace(map, row=row, col=1)
+        fig.update_xaxes(
+            row=row, col=1,
             tickvals=list(range(cs.shape[1])),
             ticktext=ticks,
-            tickfont=dict(family='monospace'),
-        ),
-        yaxis=dict(
+        )
+        fig.update_yaxes(
+            row=row, col=1,
             autorange='reversed',
-            #scaleanchor='x',
             tickvals=list(range(cs.shape[0])),
             ticktext=ticks,
-            tickfont=dict(family='monospace'),
         )
+    
+    bgcolor = ','.join(str(x) for x in (255, 255, 255, 1))
+    
+    fig.update_layout(
+        xaxis=dict(
+            side='top',
+            tickfont=dict(family='monospace'),
+            showgrid=False,
+            showline=False,
+        ),
+        yaxis=dict(
+            #scaleanchor='x',
+            tickfont=dict(family='monospace'),
+            showgrid=False,
+            showline=False,
+        ),
+        height=300*len(titles),
+        plot_bgcolor=f'rgba({bgcolor})',
     )
     
-    return fig, fig2
+    for row in range(len(contexts)):
+        fig.update_traces(
+            row=row, col=1,
+            colorbar=dict(
+                yanchor='top',
+                y=1-row/len(contexts),
+                len=1/len(contexts),
+            )
+        )
+    
+    return fig
+    
+
+def run(
+    prompt: str,
+    padding: Union[str,int,None],
+    skip_comma: bool,
+    to_k: bool,
+    gl: bool
+):
+    if padding is None:
+        padding = 0
+    elif isinstance(padding, str):
+        if len(padding) == 0:
+            padding = 0
+        else:
+            try:
+                padding = int(padding)
+            except:
+                pass
+    
+    sd_model = SDModel(shared.sd_model)
+    te = sd_model.clip
+    unet = sd_model.unet
+    
+    tokens, context = generate_embeddings(te, prompt, padding)
+    # v := (75, 768) or (75, 1024)
+    
+    # main plot
+    fig = build_main_graph('Embedding Vector', context, tokens, skip_comma, use_gl=gl, force_float=True)
+    
+    # CLIP
+    fig2 = build_correl_graph([te.wrapped.__class__.__name__], [context], tokens, skip_comma, use_gl=gl, force_float=True)
+    
+    # xattn.to_k
+    fig3 = None
+    if to_k:
+        titles = []
+        contexts = []
+        
+        for name, mod in each_unet_attn_layers(unet):
+            if 'xattn' in name:
+                wk = mod.to_k.weight
+                context.to(wk.device, wk.dtype, inplace=True)
+                k = mod.to_k(context._context)
+                titles.append(name)
+                contexts.append(Context(k, len(tokens)))
+        
+        fig3 = build_correl_graph(titles, contexts, tokens, skip_comma, use_gl=gl, force_float=True)
+    
+    return fig, fig2, fig3
 
 def add_tab():
-    def wrap(fn):
+    def wrap(fn, values: int = 1):
         def f(*args, **kwargs):
             v, e = None, ''
             try:
-                v = fn(*args, **kwargs)
-            except Exception as ex:
-                e = traceback.format_exc()
-                print(e, file=sys.stderr)
-            if isinstance(v, tuple):
+                with torch.inference_mode():
+                    v = fn(*args, **kwargs)
+            except Exception:
+                ex = traceback.format_exc()
+                print(ex, file=sys.stderr)
+                e = str(ex).replace('\n', '<br/>')
+            if 1 < values:
+                if v is None:
+                    v = [None] * values
                 return [*v, e]
             else:
                 return [v, e]
@@ -201,11 +361,13 @@ def add_tab():
         with gr.Row():
             padding = gr.Textbox(label='Padding token (ID or single token)')
             skip = gr.Checkbox(value=True, label='Skip commas (,)')
+            to_k = gr.Checkbox(value=True, label='to_k (xattn)')
         button = gr.Button(variant='primary')
         graph = gr.Plot()
         graph2 = gr.Plot()
+        graph3 = gr.Plot()
     
-        button.click(fn=wrap(run), inputs=[prompt, padding, skip, gl], outputs=[graph, graph2, error])
+        button.click(fn=wrap(run, 3), inputs=[prompt, padding, skip, to_k, gl], outputs=[graph, graph2, graph3, error])
     
     return [(ui, NAME, NAME.lower())]
 
