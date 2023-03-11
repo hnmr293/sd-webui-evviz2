@@ -34,4 +34,4 @@ This figure shows correlations between each token. Calculation is carried out as
 4. Let `d_{t,n}` is nth row vector of `d_{t}`. `d_{t,n}` is a 768(or 1024)-dimensional vector representing `t`'s effect on nth token. Then compute `|d_{t,n}|` where `|x|` is norm of a vector `x`.
 5. Repeat procedure 2..3 for all `t` in the given prompt.
 
-By default, *padding token* is `!` (ID=0).
+By default, *padding token* is `_</w>` (ID=318).

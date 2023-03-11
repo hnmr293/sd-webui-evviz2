@@ -1,5 +1,5 @@
 # =======================================================================================
-from scripts.lib.utils import ensure_install
+from scripts.evviz2lib.utils import ensure_install
 ensure_install('plotly')
 # =======================================================================================
 
@@ -20,7 +20,7 @@ from modules import script_callbacks
 from modules import shared
 from modules.sd_hijack_clip import FrozenCLIPEmbedderWithCustomWordsBase as CLIP
 
-from scripts.lib.sdhook import SDModel, each_unet_attn_layers
+from scripts.evviz2lib.sdhook import SDModel, each_unet_attn_layers
 
 NAME = 'EvViz2'
 
@@ -84,6 +84,8 @@ def generate_embeddings(
     
     if isinstance(padding, str):
         padding = token_to_id(padding)
+    
+    print(f'[EvViz2] Padding token: {id_to_token(padding)} ({padding})', file=sys.stderr)
     
     tokens = te.tokenize([prompt])[0]
     #vocab = tokenizer.get_vocab()
@@ -300,10 +302,10 @@ def run(
     gl: bool
 ):
     if padding is None:
-        padding = 0
+        padding = '_</w>'
     elif isinstance(padding, str):
         if len(padding) == 0:
-            padding = 0
+            padding = '_</w>'
         else:
             try:
                 padding = int(padding)
