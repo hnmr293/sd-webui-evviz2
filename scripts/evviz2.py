@@ -296,6 +296,7 @@ def run(
     padding: Union[str,int,None],
     skip_comma: bool,
     to_k: bool,
+    to_v: bool,
     gl: bool
 ):
     if padding is None:
@@ -320,25 +321,30 @@ def run(
     fig = build_main_graph('Embedding Vector', context, tokens, skip_comma, use_gl=gl, force_float=True)
     
     # CLIP
-    fig2 = build_correl_graph([te.wrapped.__class__.__name__], [context], tokens, skip_comma, use_gl=gl, force_float=True)
+    titles = [te.wrapped.__class__.__name__]
+    contexts = [context]
     
-    # xattn.to_k
-    fig3 = None
     if to_k:
-        titles = []
-        contexts = []
-        
         for name, mod in each_unet_attn_layers(unet):
             if 'xattn' in name:
                 wk = mod.to_k.weight
                 context.to(wk.device, wk.dtype, inplace=True)
                 k = mod.to_k(context._context)
-                titles.append(name)
+                titles.append(name + '.to_k')
                 contexts.append(Context(k, len(tokens)))
         
-        fig3 = build_correl_graph(titles, contexts, tokens, skip_comma, use_gl=gl, force_float=True)
+    if to_v:
+        for name, mod in each_unet_attn_layers(unet):
+            if 'xattn' in name:
+                wk = mod.to_k.weight
+                context.to(wk.device, wk.dtype, inplace=True)
+                v = mod.to_v(context._context)
+                titles.append(name + '.to_v')
+                contexts.append(Context(v, len(tokens)))
+        
+    fig2 = build_correl_graph(titles, contexts, tokens, skip_comma, use_gl=gl, force_float=True)
     
-    return fig, fig2, fig3
+    return fig, fig2
 
 def add_tab():
     def wrap(fn, values: int = 1):
@@ -367,12 +373,12 @@ def add_tab():
             padding = gr.Textbox(label='Padding token (ID or single token)')
             skip = gr.Checkbox(value=True, label='Skip commas (,)')
             to_k = gr.Checkbox(value=True, label='to_k (xattn)')
+            to_v = gr.Checkbox(value=True, label='to_v (xattn)')
         button = gr.Button(variant='primary')
         graph = gr.Plot()
         graph2 = gr.Plot()
-        graph3 = gr.Plot()
     
-        button.click(fn=wrap(run, 3), inputs=[prompt, padding, skip, to_k, gl], outputs=[graph, graph2, graph3, error])
+        button.click(fn=wrap(run, 2), inputs=[prompt, padding, skip, to_k, to_v, gl], outputs=[graph, graph2, error])
     
     return [(ui, NAME, NAME.lower())]
 
