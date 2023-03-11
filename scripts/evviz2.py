@@ -6,6 +6,7 @@ ensure_install('plotly')
 import sys
 import traceback
 from dataclasses import dataclass
+import colorsys
 from typing import List, Tuple, Dict, Callable, Union
 
 import numpy as np
@@ -115,10 +116,14 @@ def build_main_graph(
     v_max = torch.max(context)
     y_count = 0
     
+    hlsa_0 = torch.FloatTensor([0.0, 0.625, 1.0])
+    hlsa_1 = torch.FloatTensor([-1/3, 0.5, 1.0])
     for pos, tt in enumerate(tokens):
         if skip_comma and tt.token == ',</w>':
             continue
         
+        color = torch.lerp(hlsa_0, hlsa_1, pos/len(tokens))
+        r, g, b = [int(255*x) for x in colorsys.hls_to_rgb(*[x.item() for x in color])]
         base_y = y_count * v_max/2
         vals = context[pos] + base_y
         
@@ -138,12 +143,12 @@ def build_main_graph(
                     symbol='circle',
                     color='rgba(0,0,0,0)',
                     line=dict(
-                        color='rgba(255,64,64,1)',
+                        color=f'rgba({r},{g},{b},1)',
                         width=1,
                     ),
                 ),
                 line=dict(
-                    color='rgba(255,64,64,0.5)',
+                    color=f'rgba({r},{g},{b},0.5)',
                     width=2,
                 ),
                 hovertemplate='%{x}<br>%{customdata[0]}',
