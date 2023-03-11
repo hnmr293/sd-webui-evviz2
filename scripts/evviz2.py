@@ -375,10 +375,15 @@ def add_tab():
             to_k = gr.Checkbox(value=True, label='to_k (xattn)')
             to_v = gr.Checkbox(value=True, label='to_v (xattn)')
         button = gr.Button(variant='primary')
+        close = gr.Button(value='Close')
         graph = gr.Plot()
         graph2 = gr.Plot()
     
+        def close_fn():
+            return None, None
+        
         button.click(fn=wrap(run, 2), inputs=[prompt, padding, skip, to_k, to_v, gl], outputs=[graph, graph2, error])
+        close.click(fn=close_fn, inputs=[], outputs=[graph, graph2])
     
     return [(ui, NAME, NAME.lower())]
 
