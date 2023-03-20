@@ -172,6 +172,7 @@ def create_correl_map(
     context: Context,
     tokens: List[Token],
     skip_comma: bool,
+    ignore_self_correl: bool,
     use_gl: bool,
     force_float: bool,
 ):
@@ -196,8 +197,9 @@ def create_correl_map(
             continue
         dv = context.base - context.padded[pos]
         dv_norm = torch.linalg.vector_norm(dv, dim=1) # (75,)
-        #dv_norm[pos] = 0.0
-        dv_norm[pos] = np.nan
+        if ignore_self_correl:
+            #dv_norm[pos] = 0.0
+            dv_norm[pos] = np.nan
         correls.append(dv_norm)
         indices.append(pos)
     
@@ -229,6 +231,7 @@ def build_correl_graph(
     contexts: List[Context],
     tokens: List[Token],
     skip_comma: bool,
+    ignore_self_correl: bool,
     use_gl: bool,
     force_float: bool,
 ):
@@ -246,7 +249,7 @@ def build_correl_graph(
     )
     
     for row, context in enumerate(contexts, start=1):
-        map, cs, indices = create_correl_map(context, tokens, skip_comma, use_gl=use_gl, force_float=force_float)
+        map, cs, indices = create_correl_map(context, tokens, skip_comma, ignore_self_correl, use_gl=use_gl, force_float=force_float)
         ticks = [ tokens[index].token.replace('</w>', '') for index in indices ]
         fig.add_trace(map, row=row, col=1)
         fig.update_xaxes(
@@ -297,6 +300,7 @@ def run(
     prompt: str,
     padding: Union[str,int,None],
     skip_comma: bool,
+    ignore_self_correl: bool,
     to_k: bool,
     to_v: bool,
     gl: bool
@@ -344,7 +348,7 @@ def run(
                 titles.append(name + '.to_v')
                 contexts.append(Context(v, len(tokens)))
         
-    fig2 = build_correl_graph(titles, contexts, tokens, skip_comma, use_gl=gl, force_float=True)
+    fig2 = build_correl_graph(titles, contexts, tokens, skip_comma, ignore_self_correl, use_gl=gl, force_float=True)
     
     return fig, fig2
 
@@ -374,6 +378,7 @@ def add_tab():
         with gr.Row():
             padding = gr.Textbox(label='Padding token (ID or single token)')
             skip = gr.Checkbox(value=True, label='Skip commas (,)')
+            ignore_self_correl = gr.Checkbox(value=False, label='Ignore self-correlation')
             to_k = gr.Checkbox(value=True, label='to_k (xattn)')
             to_v = gr.Checkbox(value=True, label='to_v (xattn)')
         button = gr.Button(variant='primary')
@@ -384,7 +389,7 @@ def add_tab():
         def close_fn():
             return None, None
         
-        button.click(fn=wrap(run, 2), inputs=[prompt, padding, skip, to_k, to_v, gl], outputs=[graph, graph2, error])
+        button.click(fn=wrap(run, 2), inputs=[prompt, padding, skip, ignore_self_correl, to_k, to_v, gl], outputs=[graph, graph2, error])
         close.click(fn=close_fn, inputs=[], outputs=[graph, graph2])
     
     return [(ui, NAME, NAME.lower())]
