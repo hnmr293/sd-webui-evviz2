@@ -301,6 +301,7 @@ def run(
     padding: Union[str,int,None],
     skip_comma: bool,
     ignore_self_correl: bool,
+    force_float: bool,
     to_k: bool,
     to_v: bool,
     gl: bool
@@ -334,7 +335,10 @@ def run(
         for name, mod in each_unet_attn_layers(unet):
             if 'xattn' in name:
                 wk = mod.to_k.weight
-                context.to(wk.device, wk.dtype, inplace=True)
+                dtype = wk.dtype
+                if force_float:
+                    dtype = torch.float
+                context.to(wk.device, dtype, inplace=True)
                 k = mod.to_k(context._context)
                 titles.append(name + '.to_k')
                 contexts.append(Context(k, len(tokens)))
@@ -343,7 +347,10 @@ def run(
         for name, mod in each_unet_attn_layers(unet):
             if 'xattn' in name:
                 wk = mod.to_k.weight
-                context.to(wk.device, wk.dtype, inplace=True)
+                dtype = wk.dtype
+                if force_float:
+                    dtype = torch.float
+                context.to(wk.device, dtype, inplace=True)
                 v = mod.to_v(context._context)
                 titles.append(name + '.to_v')
                 contexts.append(Context(v, len(tokens)))
@@ -381,6 +388,7 @@ def add_tab():
             ignore_self_correl = gr.Checkbox(value=False, label='Ignore self-correlation')
             to_k = gr.Checkbox(value=True, label='to_k (xattn)')
             to_v = gr.Checkbox(value=True, label='to_v (xattn)')
+            force_float = gr.Checkbox(value=False, label='Force convert half to float (for some platforms)')
         button = gr.Button(variant='primary')
         close = gr.Button(value='Close')
         graph = gr.Plot()
@@ -389,7 +397,7 @@ def add_tab():
         def close_fn():
             return None, None
         
-        button.click(fn=wrap(run, 2), inputs=[prompt, padding, skip, ignore_self_correl, to_k, to_v, gl], outputs=[graph, graph2, error])
+        button.click(fn=wrap(run, 2), inputs=[prompt, padding, skip, ignore_self_correl, force_float, to_k, to_v, gl], outputs=[graph, graph2, error])
         close.click(fn=close_fn, inputs=[], outputs=[graph, graph2])
     
     return [(ui, NAME, NAME.lower())]
