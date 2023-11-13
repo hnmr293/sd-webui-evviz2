@@ -85,7 +85,7 @@ def generate_embeddings(
     if isinstance(padding, str):
         padding = token_to_id(padding)
     
-    print(f'[EvViz2] Padding token: {id_to_token(padding)} ({padding})', file=sys.stderr)
+    print(f'[{NAME}] Padding token: {id_to_token(padding)} ({padding})', file=sys.stderr)
     
     tokens = te.tokenize([prompt])[0]
     #vocab = tokenizer.get_vocab()
