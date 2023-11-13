@@ -287,6 +287,12 @@ def each_unet_resblock(unet: nn.Module):
 
 from modules.sd_hijack_clip import FrozenCLIPEmbedderWithCustomWordsBase
 
+try:
+    from sgm.modules import GeneralConditioner
+except:
+    print("[EvViz2] failed to load `sgm.modules.GeneralConditioner`")
+    GeneralConditioner = int
+    
 class SDModel:
     
     clip: FrozenCLIPEmbedderWithCustomWordsBase
@@ -302,7 +308,11 @@ class SDModel:
         unet = getattr(wrapper, "diffusion_model", None) if wrapper is not None else None
         vae  = getattr(sd_model, "first_stage_model", None)
         
-        assert isinstance(clip, FrozenCLIPEmbedderWithCustomWordsBase)
+        clip_type = (FrozenCLIPEmbedderWithCustomWordsBase,)
+        if GeneralConditioner is not int:
+            clip_type += (GeneralConditioner,)
+        
+        assert isinstance(clip, clip_type)
         assert isinstance(unet, nn.Module)
         assert isinstance(vae, nn.Module)
         

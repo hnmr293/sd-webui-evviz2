@@ -21,6 +21,7 @@ from modules import shared
 from modules.sd_hijack_clip import FrozenCLIPEmbedderWithCustomWordsBase as CLIP
 
 from scripts.evviz2lib.sdhook import SDModel, each_unet_attn_layers
+from scripts.evviz2lib.sdhook import GeneralConditioner as CLIP_SDXL
 
 NAME = 'EvViz2'
 
@@ -62,25 +63,38 @@ class Context:
             return Context(self._context.to(device, dtype), self.token_count)
 
 
+def clip_type(te):
+    if isinstance(te, CLIP):
+        if hasattr(te.wrapped, 'tokenizer'):
+            return 'v1'
+        else:
+            return 'v2'
+    elif hasattr(te, 'embedders'):
+        return 'xl'
+    else:
+        raise RuntimeError(f'unknown text encoder: {te.__class__.__name__}')
+
+
 def generate_embeddings(
-    te: CLIP,
+    te: Union[CLIP,CLIP_SDXL],
     prompt: str,
     padding: Union[str,int]
 ) -> Tuple[List[Token], Context]:
-    
-    if hasattr(te.wrapped, 'tokenizer'):
-        # v1
+    ty = clip_type(te)
+    print(f'[{NAME}] clip type: {ty}')
+    if ty in ('v1',):
         tokenizer = te.wrapped.tokenizer
         token_to_id: Callable[[str],int] = lambda t: tokenizer._convert_token_to_id(t)
         id_to_token: Callable[[int],str] = lambda t: tokenizer.convert_ids_to_tokens(t)
         ids_to_tokens: Callable[[List[int]],List[str]] = lambda ts: tokenizer.convert_ids_to_tokens(ts)
-    else:
-        # v2
+    elif ty in ('v2','xl'):
         import open_clip
         tokenizer = open_clip.tokenizer._tokenizer
         token_to_id: Callable[[str],int] = lambda t: tokenizer.encoder[t]
         id_to_token: Callable[[int],str] = lambda t: tokenizer.decoder[t]
         ids_to_tokens: Callable[[List[int]],List[str]] = lambda ts: [tokenizer.decoder[t] for t in ts]
+    else:
+        raise RuntimeError(f'unknown type of text encoder: {ty} [{te.__class__.__name__}]')
     
     if isinstance(padding, str):
         padding = token_to_id(padding)
@@ -97,7 +111,15 @@ def generate_embeddings(
         words = ''.join(ids_to_tokens(ts)).replace('</w>', ' ')
         prompts.append(words)
     
-    embeddings = te(prompts).cpu()
+    if ty in ('v1','v2'):
+        embeddings = te(prompts)
+    else:
+        assert ty == 'xl'
+        a1 = te.embedders[0](prompts)    # (n, 77,  768)
+        a2 = te.embedders[1](prompts)[0] # (n, 77, 1280)
+        embeddings = torch.cat((a1, a2), dim=-1) # (n, 77, 2048)
+    
+    embeddings = embeddings.cpu()
     return (
         [Token(token_num, id_to_token(token_num)) for token_num in tokens],
         Context(embeddings, len(tokens))
